@@ -13,11 +13,14 @@ The elevated process is executed in the current working directory of the calling
 ----
 
 ### Installation:  
-1. Make sure "ElevateMe.exe" and "Install_ElevateMe.ps1" are in the same directory.  
+Download the [latest release](https://github.com/german-one/ElevateMe/releases/latest).  
+1. Make sure both "ElevateMe.exe" and "Install_ElevateMe.ps1" are extracted into the same directory.  
 2. Run "Install_ElevateMe.ps1" to perform these actions:  
    - File "ElevateMe.exe" is copied to "%USERPROFILE%\AppData\Local\ElevateMe\" (where %USERPROFILE% is typically C:\Users\\<your user name\>).  
    - Scheduled Task "ElevateMe" is created.  
    - "%USERPROFILE%\AppData\Local\ElevateMe" is added to the PATH environment of the current user.  
+
+You can delete the installation files if they are not needed any longer.  
 
 ----
 
