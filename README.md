@@ -28,7 +28,7 @@ You can delete the installation files if they are not needed any longer.
 **`ElevateMe.exe show [wait] command`**  
 
 | argument | description |  
-| --- | --- |  
+| :---: | :--- |  
 | show | Integer value that specifies the window appearance of the elevated process.<br> When in doubt choose 1, 3 or 7. No other values are recommended.<br> Supported values are:<br> &nbsp; 0 &nbsp; Hide the window and activate another window.<br> &nbsp; 1 &nbsp; Activate and display the window.<br> &nbsp; 2 &nbsp; Activate and minimize.<br> &nbsp; 3 &nbsp; Activate and maximize.<br> &nbsp; 4 &nbsp; Restore. The active window remains active.<br> &nbsp; 5 &nbsp; Activate and Restore.<br> &nbsp; 6 &nbsp; Minimize and activate the next top-level window in the Z order.<br> &nbsp; 7 &nbsp; Minimize. The active window remains active.<br> Carefully use 0, take into account that you are not able to interact with a hidden window that tries to prompt you for input. |
 | wait<br> (optional) | Integer value that specifies whether or not the elevated process is synchronized with the execution of the calling process.<br> Value 0 is for "false", any other value is for "true".<br> If omitted, the elevated process is not synchronized ("false"). That is, the calling process does not wait for the elevated process to terminate before it resumes the execution. |
 | command | One or more tokens that collectively form the command, where the first token is the name of the application (\*.exe, \*.com) to be executed with elevated privileges. |
@@ -49,7 +49,7 @@ You can delete the installation files if they are not needed any longer.
 
 ----
 
-### Workflow:  
+### Internal workflow:  
 This figure illustrates the design.  
 Note that there are two instances of "ElevateMe.exe". The first is created by the user, the second is created by the scheduled task with highest available privileges.  
 
