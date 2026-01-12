@@ -126,18 +126,14 @@ MAIN(void);
 
 #  define TASK_ROOT L"\\"
 #  define TASK_NAME L"ElevateMe"
-#  define TAGGED_UUID_PATTERN L"T{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" // placeholder for a tag character (see below) + scheme of a uuid string as created by StringFromGUID2()
-#  define TAG_EVT L'\xFDDE' // begin of the name of a named event, also set for the identifier passed to the elevated process
-#  define TAG_FMO L'\xFDDF' // begin of the name of a file mapping object; this and TAG_EVT are noncharacters, see https://www.unicode.org/faq/private_use#nonchar1
+#  define TAGGED_UUID_PATTERN L"T~{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" // TAG character (see below) + tilde + scheme of a uuid string as created by StringFromGUID2()
+#  define TAG L'\xFDDE' // begins the name of an event, also used to identify the elevated process; this is a noncharacter, see https://www.unicode.org/faq/private_use#nonchar1
+#  define FMO_NAME(taggedid_) (taggedid_ + 1) // skip the leading TAG to get the name of a file mapping object, because it must be distinct from the event name
 #endif
 
 static HANDLE evt = NULL; // named event
 static HANDLE fmo = NULL; // named file mapping object
 static LPVOID view = NULL; // view of the file mapping
-static BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN)) = {
-  .nbytes = sizeof(TAGGED_UUID_PATTERN) - sizeof(WCHAR),
-  .bstr = { TAG_FMO } // tagged uuid string "T{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}", tag T is an alternating prefix: TAG_EVT or TAG_FMO (initially)
-};
 
 #if REGION(invoker branch)
 static FORCE_INLINE HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
@@ -156,7 +152,7 @@ static FORCE_INLINE HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
   CLEANUP_IF_FAILED(ITaskService_Connect(pTaskSvc, vEmptyByVal, vEmptyByVal, vEmptyByVal, vEmptyByVal));
   CLEANUP_IF_FAILED(ITaskService_GetFolder(pTaskSvc, rootName.bstr, &pTaskFolder));
   CLEANUP_IF_FAILED(ITaskFolder_GetTask(pTaskFolder, taskName.bstr, &pRegTask));
-  hres = IRegisteredTask_Run(pRegTask, *pTaskArg, NULL); // pTaskArg ultimately references the TAG_EVT prefixed uuid string
+  hres = IRegisteredTask_Run(pRegTask, *pTaskArg, NULL); // pTaskArg ultimately references the identifier
 
 cleanup:
   if (pRegTask)
@@ -169,14 +165,14 @@ cleanup:
   return hres;
 }
 
-static FORCE_INLINE HRESULT MakeIdentifierUnique(void)
+static FORCE_INLINE HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
 {
   GUID uuid;
   const HRESULT hres = CoCreateGuid(&uuid);
   if (FAILED(hres))
     return hres;
 
-  (void)StringFromGUID2(&uuid, identifier.bstr + 1, ARRAYSIZE(TAGGED_UUID_PATTERN) - 1);
+  (void)StringFromGUID2(&uuid, identifierBstr + 2, ARRAYSIZE(TAGGED_UUID_PATTERN) - 2); // retain leading TAG and tilde
   return S_OK;
 }
 
@@ -191,6 +187,7 @@ static FORCE_INLINE HRESULT ConvertNumericArgs(const WCHAR **const pArg, DWORD *
 
 static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
 {
+  static BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN)) = { .nbytes = sizeof(TAGGED_UUID_PATTERN) - sizeof(WCHAR), .bstr = { TAG, L'~' } }; // the uuid string is appended later
   static VARIANT taskArg = { .vt = VT_BSTR, .bstrVal = identifier.bstr };
 
   HRESULT hres = CoInitialize(NULL);
@@ -200,11 +197,11 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   DWORD show, wait;
   CLEANUP_IF_FAILED(ConvertNumericArgs(&arg, &show, &wait));
 
-  CLEANUP_IF_FAILED(MakeIdentifierUnique()); // append a uuid string to the TAG_FMO character in the identifier.bstr buffer
+  CLEANUP_IF_FAILED(MakeIdentifierUnique(identifier.bstr)); // append a uuid string
   SKIP_SEPARATORS(arg); // move the arg pointer to the first character of the command
   const WORD cmdLen = (WORD)(PROC_PARAM_VALUE_OF(cmdLnSize) / sizeof(WCHAR) - (WORD)(arg - PROC_PARAM_VALUE_OF(cmdLnBuf)) + 1); // remaining command line, +1 for the terminating null
   const DWORD dirLen = PROC_PARAM_VALUE_OF(curDirSize) / sizeof(WCHAR) + 1; // +1 for the terminating null
-  CLEANUP_WITH_LAST_ERROR_IF(!(fmo = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)(sizeof(STARTUPINFOW) + (dirLen + cmdLen) * sizeof(WCHAR) + PROC_PARAM_VALUE_OF(envSize)), identifier.bstr))); // file mapping object backed by the system paging file
+  CLEANUP_WITH_LAST_ERROR_IF(!(fmo = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, (DWORD)(sizeof(STARTUPINFOW) + (dirLen + cmdLen) * sizeof(WCHAR) + PROC_PARAM_VALUE_OF(envSize)), FMO_NAME(identifier.bstr)))); // file mapping object backed by the system paging file
   CLEANUP_WITH_LAST_ERROR_IF(!(view = MapViewOfFile(fmo, FILE_MAP_WRITE, 0, 0, 0))); // "The initial contents of the pages in a file mapping object backed by the paging file are 0 (zero)." https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile
 
   STARTUPINFOW *const pSettings = (STARTUPINFOW *)view; // zero-initialized, see above
@@ -219,7 +216,6 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   CopyMemory((strDest += cmdLen), PROC_PARAM_VALUE_OF(curDirBuf), PROC_PARAM_VALUE_OF(curDirSize)); // current directory, the terminator is maintained in the zero-initialized view memory
   CopyMemory(strDest + dirLen, PROC_PARAM_VALUE_OF(envBuf), PROC_PARAM_VALUE_OF(envSize)); // environment strings
 
-  identifier.bstr[0] = TAG_EVT;
   CLEANUP_WITH_LAST_ERROR_IF(!(evt = CreateEventW(NULL, FALSE, FALSE, identifier.bstr)));
   CLEANUP_IF_FAILED(RunScheduledTask(&taskArg)); // taskArg statically references the identifier.bstr
   CLEANUP_WITH_LAST_ERROR_IF(WaitForSingleObject(evt, INFINITE) != WAIT_OBJECT_0);
@@ -239,9 +235,7 @@ static FORCE_INLINE HRESULT AsAdmin(const WCHAR *const arg, const DWORD *const p
 
   HRESULT hres = S_OK;
   CLEANUP_WITH_LAST_ERROR_IF(!(evt = OpenEventW(EVENT_MODIFY_STATE, FALSE, arg)));
-
-  CopyMemory(identifier.bstr + 1, arg + 1, identifier.nbytes - sizeof(WCHAR)); // this app is not meant to modify kernel-created data, hence the copy; the successfully opened event has proven that arg does indeed point to the identifier
-  CLEANUP_WITH_LAST_ERROR_IF(!(fmo = OpenFileMappingW(FILE_MAP_WRITE, FALSE, identifier.bstr)));
+  CLEANUP_WITH_LAST_ERROR_IF(!(fmo = OpenFileMappingW(FILE_MAP_WRITE, FALSE, FMO_NAME(arg)))); // the successfully opened event has proven that arg does indeed point to the identifier
   CLEANUP_WITH_LAST_ERROR_IF(!(view = MapViewOfFile(fmo, FILE_MAP_WRITE, 0, 0, 0)));
 
   STARTUPINFOW *const pSettings = (STARTUPINFOW *)view;
@@ -311,7 +305,7 @@ MAIN(void)
     QUIT(E_INVALIDARG);
 
   const DWORD *const pLastError = (const DWORD *)((void *const *)pTeb + 13); // pointer to the TEB::LastErrorValue field, which is the source of the value that GetLastError() returns
-  const HRESULT hres = (*arg != TAG_EVT) ?
+  const HRESULT hres = (*arg != TAG) ?
                          AsInvoker(arg, pLastError, pProcParams) : // the user called the app
                          AsAdmin(arg, pLastError); // the scheduled task called the app elevated
 
