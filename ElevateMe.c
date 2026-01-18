@@ -6,11 +6,11 @@
 #  pragma GCC diagnostic ignored "-Wdeclaration-after-statement" // we meet recent C standards
 #  if defined(__clang__)
 #    pragma clang diagnostic ignored "-Wnonportable-system-include-path" // the capitalization of Windows header names varies
-#    pragma clang diagnostic ignored "-Wunsafe-buffer-usage" // this is C code, which typically uses pointer arithmetic
+#    pragma clang diagnostic ignored "-Wunsafe-buffer-usage" // this is C code, which typically contains pointer arithmetic
 #  endif
 #endif
 
-#include <stdlib.h>
+// Windows-specific dependencies: kernel32.lib, ole32.lib, taskschd.lib
 #include <windows.h>
 #include <winternl.h>
 #include <initguid.h>
@@ -30,12 +30,11 @@
 #    else
 #      define NO_RETURN __declspec(noreturn)
 #    endif
-#    define QUIT(status_) _exit((int)(status_))
+#    define QUIT(status_) ExitProcess((UINT)(status_))
 #    if defined(_MSC_VER)
 //    ***  MSVC (also if used with the LLVM (clang-cl) tool-set)
-//     - add compiler option: /Zl
+//     - add compiler options: /Zl /GS-
 //     - add linker options: /ENTRY:start /NODEFAULTLIB
-//     - manually add libraries: msvcrt.lib;ucrt.lib;vcruntime.lib
 #      define MAIN NO_RETURN void WINAPI start
 #    else
 //    *** GCC or Clang
@@ -117,11 +116,11 @@ MAIN(void);
 #  define POINTS_TO_SEPARATOR(pchar_) (*(pchar_) == L' ' || *(pchar_) == L'\t') // space and tab are the default separators in a command line
 #  define SKIP_SEPARATORS(pchar_) for (++(pchar_); POINTS_TO_SEPARATOR(pchar_); ++(pchar_))
 
-#  define BSTR_BUF(varname_, count_) /* derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr */                  \
-    struct tag_##varname_                                                                                                                                 \
-    {                                                                                                                                                     \
-      DWORD nbytes; /* length of the string in bytes, null terminator not counted */                                                                      \
-      WCHAR bstr[(((count_) * sizeof(WCHAR) + sizeof(DWORD) - 1) / sizeof(DWORD)) * sizeof(DWORD) / sizeof(WCHAR)]; /* DWORD aligned to avoid warnings */ \
+#  define BSTR_BUF(varname_, count_) /* derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr */ \
+    struct tag_##varname_                                                                                                                \
+    {                                                                                                                                    \
+      DWORD nbytes; /* length of the string in bytes, null terminator not counted */                                                     \
+      WCHAR bstr[((count_) + sizeof(DWORD) - 1) & ~(sizeof(DWORD) - 1)]; /* string buffer, DWORD aligned to avoid warnings */            \
     } varname_
 
 #  define TASK_ROOT L"\\"
@@ -136,6 +135,92 @@ static HANDLE fmo = NULL; // named file mapping object
 static LPVOID view = NULL; // view of the file mapping
 
 #if REGION(invoker branch)
+static UINT16 U16FromCStrW(const WCHAR *const str, const WCHAR **const endptr)
+{
+  // -2 white spaces, invalid digits; -1 invalid digits; 0..15 oct, dec, hex digits
+  // the upper limits of the ranges used in this table depend on the highest character value being tested in each case, which never exceeds 0x66 (offset of hex digit 'f')
+  static const INT8 lookup[] = {
+    // clang-format off
+    /*       _0  _1  _2  _3  _4  _5  _6  _7  _8  _9  _A  _B  _C  _D  _E  _F */
+    /* 0_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -1, -1,
+    /* 1_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    /* 2_ */ -2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    /* 3_ */  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1,
+    /* 4_ */ -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    /* 5_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    /* 6_ */ -1, 10, 11, 12, 13, 14, 15
+    // clang-format on
+  };
+
+  *endptr = str;
+  const WCHAR *pChar = str;
+  for (; *pChar <= L' ' && lookup[*pChar] == -2; ++pChar) // skip white spaces
+    ;
+
+  int neg = 0; // not negative (default)
+  if (*pChar == L'-')
+  {
+    neg = 1;
+    ++pChar;
+  }
+  else if (*pChar == L'+')
+    ++pChar;
+
+  INT8 item;
+  WCHAR ceiling = L'9'; // as oct and hex are introduced by a leading '0', only '0'..'9' can initiate a numeric sequence
+  if (*pChar > ceiling || (item = lookup[*pChar]) < 0)
+    return 0;
+
+  INT8 radix = 10; // dec (default)
+  ++pChar;
+  if (item == 0)
+  {
+    if ((*pChar | 0x20) == 'x')
+    {
+      ceiling = L'f';
+      ++pChar;
+      if (*pChar > ceiling || (item = lookup[*pChar]) < 0)
+        return 0;
+
+      radix = 16; // hex
+      ++pChar;
+    }
+    else
+    {
+      ceiling = L'7';
+      radix = 8; // oct
+    }
+  }
+
+  int result = item;
+  for (; *pChar <= ceiling && (item = lookup[*pChar]) >= 0; ++pChar)
+  {
+    result = result * radix + item;
+    if (result > MAXUINT16)
+    {
+      for (++pChar; *pChar <= ceiling && lookup[*pChar] >= 0; ++pChar)
+        ;
+
+      *endptr = pChar;
+      return MAXUINT16;
+    }
+  }
+
+  if (neg)
+    result = -result;
+
+  *endptr = pChar;
+  return (UINT16)result;
+}
+
+static inline WCHAR *EndOfCopyMemoryW(WCHAR *dst, const WCHAR *src, DWORD cnt)
+{
+  while (cnt--)
+    *dst++ = *src++;
+
+  return dst; // note: this is the pointer to the WCHAR past the last copied
+}
+
 static FORCE_INLINE HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
 {
   static const VARIANT vEmptyByVal = { .vt = VT_EMPTY };
@@ -178,9 +263,9 @@ static FORCE_INLINE HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
 
 static FORCE_INLINE HRESULT ConvertNumericArgs(const WCHAR **const pArg, DWORD *const pShow, DWORD *const pWait)
 {
-  WCHAR *endptr;
-  *pShow = wcstoul(*pArg, &endptr, 0); // if the show and wait arguments are missing, endptr points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
-  *pWait = wcstoul(endptr, &endptr, 0); // if the wait argument is omitted, *pWait will default to 0 (FALSE) and endptr will remain the same
+  const WCHAR *endptr;
+  *pShow = U16FromCStrW(*pArg, &endptr); // if the show and wait arguments are missing, endptr points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
+  *pWait = U16FromCStrW(endptr, &endptr); // if the wait argument is omitted, *pWait will default to 0 (FALSE) and endptr will remain the same
   *pArg = endptr;
   return (*pShow < 8 && POINTS_TO_SEPARATOR(*pArg)) ? S_OK : E_INVALIDARG;
 }
@@ -212,9 +297,9 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   pSettings->dwYCountChars = dirLen; // used to transfer the path length of the current directory, incl. terminating null
   pSettings->dwFlags = STARTF_USESHOWWINDOW; // wShowWindow is used for process creation, while members like dwX* or dwY* are ignored and used for custom IPC
   pSettings->wShowWindow = (WORD)show;
-  CopyMemory(strDest, arg, cmdLen * sizeof(WCHAR)); // command
-  CopyMemory((strDest += cmdLen), PROC_PARAM_VALUE_OF(curDirBuf), PROC_PARAM_VALUE_OF(curDirSize)); // current directory, the terminator is maintained in the zero-initialized view memory
-  CopyMemory(strDest + dirLen, PROC_PARAM_VALUE_OF(envBuf), PROC_PARAM_VALUE_OF(envSize)); // environment strings
+  strDest = EndOfCopyMemoryW(strDest, arg, cmdLen); // command
+  strDest = EndOfCopyMemoryW(strDest, PROC_PARAM_VALUE_OF(curDirBuf), dirLen - 1) + 1; // current directory, the terminator is maintained in the zero-initialized view memory
+  EndOfCopyMemoryW(strDest, PROC_PARAM_VALUE_OF(envBuf), (DWORD)(PROC_PARAM_VALUE_OF(envSize) / sizeof(WCHAR))); // environment strings
 
   CLEANUP_WITH_LAST_ERROR_IF(!(evt = CreateEventW(NULL, FALSE, FALSE, identifier.bstr)));
   CLEANUP_IF_FAILED(RunScheduledTask(&taskArg)); // taskArg statically references the identifier.bstr
