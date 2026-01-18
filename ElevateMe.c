@@ -13,7 +13,6 @@
 // Windows-specific dependencies: kernel32.lib, ole32.lib, taskschd.lib
 #include <windows.h>
 #include <winternl.h>
-#include <initguid.h>
 #define COBJMACROS
 #include <taskschd.h>
 
@@ -130,6 +129,21 @@ MAIN(void);
 #  define FMO_NAME(taggedid_) (taggedid_ + 1) // skip the leading TAG to get the name of a file mapping object, because it must be distinct from the event name
 #endif
 
+// -4 terminating NUL; -3 quotation mark, invalid digit; -2 white spaces, invalid digits; -1 invalid digits; 0..15 oct, dec, hex digits
+// the upper limits of the ranges used in this table depend on the highest character value being tested in each case, which never exceeds 0x66 (offset of hex digit 'f')
+static const INT8 lookup[] = {
+  // clang-format off
+  /*       _0  _1  _2  _3  _4  _5  _6  _7  _8  _9  _A  _B  _C  _D  _E  _F */
+  /* 0_ */ -4, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -1, -1,
+  /* 1_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /* 2_ */ -2, -1, -3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /* 3_ */  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1,
+  /* 4_ */ -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /* 5_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  /* 6_ */ -1, 10, 11, 12, 13, 14, 15
+  // clang-format on
+};
+
 static HANDLE evt = NULL; // named event
 static HANDLE fmo = NULL; // named file mapping object
 static LPVOID view = NULL; // view of the file mapping
@@ -137,21 +151,6 @@ static LPVOID view = NULL; // view of the file mapping
 #if REGION(invoker branch)
 static UINT16 U16FromCStrW(const WCHAR *const str, const WCHAR **const endptr)
 {
-  // -2 white spaces, invalid digits; -1 invalid digits; 0..15 oct, dec, hex digits
-  // the upper limits of the ranges used in this table depend on the highest character value being tested in each case, which never exceeds 0x66 (offset of hex digit 'f')
-  static const INT8 lookup[] = {
-    // clang-format off
-    /*       _0  _1  _2  _3  _4  _5  _6  _7  _8  _9  _A  _B  _C  _D  _E  _F */
-    /* 0_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -1, -1,
-    /* 1_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    /* 2_ */ -2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    /* 3_ */  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1,
-    /* 4_ */ -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    /* 5_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    /* 6_ */ -1, 10, 11, 12, 13, 14, 15
-    // clang-format on
-  };
-
   *endptr = str;
   const WCHAR *pChar = str;
   for (; *pChar <= L' ' && lookup[*pChar] == -2; ++pChar) // skip white spaces
@@ -349,26 +348,23 @@ cleanup:
 #if REGION(main)
 static FORCE_INLINE const WCHAR *GetArgPtr(const WCHAR *cmdLn) // skip both the app name and the following separator(s), return a pointer to the first program argument in the command line
 {
-  static const char classes[] = "\3\0\0\0\0\0\0\0\0\2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\2\0\1";
-
   for (;; ++cmdLn)
   {
-    if (*cmdLn >= sizeof(classes) - 1) // shortcut for characters > '"'
+    int item;
+    if (*cmdLn > L'"' || (item = lookup[*cmdLn]) > -2) // shortcut for characters > '"' or those without special meaning
       continue;
 
-    switch (classes[*cmdLn]) // use the lookup table for the classification of characters '\0'..'"'
+    switch (item) // remaining characters '\0'..'"' with special meaning
     {
-    case 0: // character without special meaning here
-      continue;
-    case 1: // quotation mark, introducing a quoted (sub)string
+    case -3: // quotation mark, introducing a quoted (sub)string
       while (*++cmdLn != L'"') // find the complementary quotation mark; spaces and tabs are no separators in between
         if (*cmdLn == L'\0')
           return cmdLn;
       continue;
-    case 2: // separator SP or HT
+    case -2: // separator
       SKIP_SEPARATORS(cmdLn); // move the pointer to the first argument
       return cmdLn;
-    default: // class 3 for the string terminator NUL
+    default: // -4 string terminator NUL
       return cmdLn;
     }
   }
