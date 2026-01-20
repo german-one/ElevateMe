@@ -212,7 +212,7 @@ static UINT16 U16FromCStrW(const WCHAR *const str, const WCHAR **const endptr)
   return (UINT16)result;
 }
 
-static inline WCHAR *EndOfCopyMemoryW(WCHAR *dst, const WCHAR *src, DWORD cnt)
+static inline WCHAR *EndOfMemoryCopyW(WCHAR *dst, const WCHAR *src, DWORD cnt)
 {
   while (cnt--)
     *dst++ = *src++;
@@ -296,9 +296,9 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   pSettings->dwYCountChars = dirLen; // used to transfer the path length of the current directory, incl. terminating null
   pSettings->dwFlags = STARTF_USESHOWWINDOW; // wShowWindow is used for process creation, while members like dwX* or dwY* are ignored and used for custom IPC
   pSettings->wShowWindow = (WORD)show;
-  strDest = EndOfCopyMemoryW(strDest, arg, cmdLen); // command
-  strDest = EndOfCopyMemoryW(strDest, PROC_PARAM_VALUE_OF(curDirBuf), dirLen - 1) + 1; // current directory, the terminator is maintained in the zero-initialized view memory
-  EndOfCopyMemoryW(strDest, PROC_PARAM_VALUE_OF(envBuf), (DWORD)(PROC_PARAM_VALUE_OF(envSize) / sizeof(WCHAR))); // environment strings
+  strDest = EndOfMemoryCopyW(strDest, arg, cmdLen); // command
+  strDest = EndOfMemoryCopyW(strDest, PROC_PARAM_VALUE_OF(curDirBuf), dirLen - 1) + 1; // current directory, the terminator is maintained in the zero-initialized view memory
+  EndOfMemoryCopyW(strDest, PROC_PARAM_VALUE_OF(envBuf), (DWORD)(PROC_PARAM_VALUE_OF(envSize) / sizeof(WCHAR))); // environment strings
 
   CLEANUP_WITH_LAST_ERROR_IF(!(evt = CreateEventW(NULL, FALSE, FALSE, identifier.bstr)));
   CLEANUP_IF_FAILED(RunScheduledTask(&taskArg)); // taskArg statically references the identifier.bstr
