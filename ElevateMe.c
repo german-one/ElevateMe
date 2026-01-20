@@ -115,12 +115,12 @@ MAIN(void);
 #  define POINTS_TO_SEPARATOR(pchar_) (*(pchar_) == L' ' || *(pchar_) == L'\t') // space and tab are the default separators in a command line
 #  define SKIP_SEPARATORS(pchar_) for (++(pchar_); POINTS_TO_SEPARATOR(pchar_); ++(pchar_))
 
-#  define BSTR_BUF(varname_, count_) /* derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr */ \
-    struct tag_##varname_                                                                                                                \
-    {                                                                                                                                    \
-      DWORD nbytes; /* length of the string in bytes, null terminator not counted */                                                     \
-      WCHAR bstr[((count_) + sizeof(DWORD) - 1) & ~(sizeof(DWORD) - 1)]; /* string buffer, DWORD aligned to avoid warnings */            \
-    } varname_
+#  define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                                          \
+    struct tag_##varname_ /* derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr */    \
+    {                                                                                                                            \
+      DWORD nbytes; /* length of the string in bytes, null terminator not counted */                                             \
+      WCHAR bstr[((bufcount_) + sizeof(DWORD) - 1) & ~(sizeof(DWORD) - 1)]; /* string buffer, DWORD aligned to avoid warnings */ \
+    } varname_ = { .nbytes = ((bufcount_)-1) * sizeof(WCHAR), .bstr = __VA_ARGS__ }
 
 #  define TASK_ROOT L"\\"
 #  define TASK_NAME L"ElevateMe"
@@ -225,8 +225,8 @@ static FORCE_INLINE HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
   static const VARIANT vEmptyByVal = { .vt = VT_EMPTY };
   static ITaskFolder *pTaskFolder = NULL;
   static IRegisteredTask *pRegTask = NULL;
-  static BSTR_BUF(rootName, ARRAYSIZE(TASK_ROOT)) = { .nbytes = sizeof(TASK_ROOT) - sizeof(WCHAR), .bstr = TASK_ROOT };
-  static BSTR_BUF(taskName, ARRAYSIZE(TASK_NAME)) = { .nbytes = sizeof(TASK_NAME) - sizeof(WCHAR), .bstr = TASK_NAME };
+  static INITIALIZED_BSTR_BUF(rootName, ARRAYSIZE(TASK_ROOT), TASK_ROOT);
+  static INITIALIZED_BSTR_BUF(taskName, ARRAYSIZE(TASK_NAME), TASK_NAME);
 
   ITaskService *pTaskSvc;
   HRESULT hres = CoCreateInstance(&CLSID_TaskScheduler, NULL, CLSCTX_INPROC_SERVER, &IID_ITaskService, (LPVOID *)&pTaskSvc);
@@ -271,7 +271,7 @@ static FORCE_INLINE HRESULT ConvertNumericArgs(const WCHAR **const pArg, DWORD *
 
 static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
 {
-  static BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN)) = { .nbytes = sizeof(TAGGED_UUID_PATTERN) - sizeof(WCHAR), .bstr = { TAG, L'~' } }; // the uuid string is appended later
+  static INITIALIZED_BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN), { TAG, L'~' }); // the uuid string is appended at runtime
   static VARIANT taskArg = { .vt = VT_BSTR, .bstrVal = identifier.bstr };
 
   HRESULT hres = CoInitialize(NULL);
