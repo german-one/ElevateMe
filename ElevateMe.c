@@ -127,20 +127,18 @@ MAIN(void);
 #  define TAGGED_UUID_PATTERN L"T~{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}" // TAG character (see below) + tilde + scheme of a uuid string as created by StringFromGUID2()
 #  define TAG L'\xFDDE' // begins the name of an event, also used to identify the elevated process; this is a noncharacter, see https://www.unicode.org/faq/private_use#nonchar1
 #  define FMO_NAME(taggedid_) (taggedid_ + 1) // skip the leading TAG to get the name of a file mapping object, because it must be distinct from the event name
+#  define MAX_SHOW 7 // upper limit of the show argument
 #endif
 
-// -4 terminating NUL; -3 quotation mark, invalid digit; -2 white spaces, invalid digits; -1 invalid digits; 0..15 oct, dec, hex digits
-// the upper limits of the ranges used in this table depend on the highest character value being tested in each case, which never exceeds 0x66 (offset of hex digit 'f')
+// -4 terminating NUL; -3 quotation mark, invalid digit; -2 space or tab, invalid digits; -1 invalid digits; 0..9 digits
+// the upper limits of the ranges used in this table depend on the highest character value being tested in each case, which never exceeds 0x39 (offset of digit '9')
 static const INT8 lookup[] = {
   // clang-format off
   /*       _0  _1  _2  _3  _4  _5  _6  _7  _8  _9  _A  _B  _C  _D  _E  _F */
-  /* 0_ */ -4, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -1, -1,
+  /* 0_ */ -4, -1, -1, -1, -1, -1, -1, -1, -1, -2, -1, -1, -1, -1, -1, -1,
   /* 1_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
   /* 2_ */ -2, -1, -3, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-  /* 3_ */  0,  1,  2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1,
-  /* 4_ */ -1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-  /* 5_ */ -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-  /* 6_ */ -1, 10, 11, 12, 13, 14, 15
+  /* 3_ */  0,  1,  2,  3,  4,  5,  6,  7,  8,  9
   // clang-format on
 };
 
@@ -149,67 +147,30 @@ static HANDLE fmo = NULL; // named file mapping object
 static LPVOID view = NULL; // view of the file mapping
 
 #if REGION(invoker branch)
-static UINT16 U16FromCStrW(const WCHAR *const str, const WCHAR **const endptr)
+static inline WORD ConvertNumericArg(const WCHAR **const pArg, const BOOL skipSeparators)
 {
-  *endptr = str;
-  const WCHAR *pChar = str;
-  for (; *pChar <= L' ' && lookup[*pChar] == -2; ++pChar) // skip white spaces
-    ;
+  int result, item;
+  const WCHAR *pChar = *pArg;
+  if (skipSeparators)
+    while (POINTS_TO_SEPARATOR(pChar))
+      ++pChar;
 
-  int neg = 0; // not negative (default)
-  if (*pChar == L'-')
-  {
-    neg = 1;
-    ++pChar;
-  }
-  else if (*pChar == L'+')
-    ++pChar;
-
-  INT8 item;
-  WCHAR ceiling = L'9'; // as oct and hex are introduced by a leading '0', only '0'..'9' can initiate a numeric sequence
-  if (*pChar > ceiling || (item = lookup[*pChar]) < 0)
+  if (*pChar > L'9' || (result = lookup[*pChar]) < 0)
     return 0;
 
-  INT8 radix = 10; // dec (default)
-  ++pChar;
-  if (item == 0)
+  for (*pArg = pChar + 1; **pArg <= L'9' && (item = lookup[**pArg]) >= 0; ++*pArg)
   {
-    if ((*pChar | 0x20) == 'x')
+    result = result * 10 + item;
+    if (result > MAX_SHOW)
     {
-      ceiling = L'f';
-      ++pChar;
-      if (*pChar > ceiling || (item = lookup[*pChar]) < 0)
-        return 0;
-
-      radix = 16; // hex
-      ++pChar;
-    }
-    else
-    {
-      ceiling = L'7';
-      radix = 8; // oct
-    }
-  }
-
-  int result = item;
-  for (; *pChar <= ceiling && (item = lookup[*pChar]) >= 0; ++pChar)
-  {
-    result = result * radix + item;
-    if (result > MAXUINT16)
-    {
-      for (++pChar; *pChar <= ceiling && lookup[*pChar] >= 0; ++pChar)
+      for (++*pArg; **pArg <= L'9' && lookup[**pArg] >= 0; ++*pArg)
         ;
 
-      *endptr = pChar;
-      return MAXUINT16;
+      break;
     }
   }
 
-  if (neg)
-    result = -result;
-
-  *endptr = pChar;
-  return (UINT16)result;
+  return (WORD)result;
 }
 
 static inline WCHAR *EndOfMemoryCopyW(WCHAR *dst, const WCHAR *src, DWORD cnt)
@@ -260,26 +221,19 @@ static FORCE_INLINE HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
   return S_OK;
 }
 
-static FORCE_INLINE HRESULT ConvertNumericArgs(const WCHAR **const pArg, DWORD *const pShow, DWORD *const pWait)
-{
-  const WCHAR *endptr;
-  *pShow = U16FromCStrW(*pArg, &endptr); // if the show and wait arguments are missing, endptr points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
-  *pWait = U16FromCStrW(endptr, &endptr); // if the wait argument is omitted, *pWait will default to 0 (FALSE) and endptr will remain the same
-  *pArg = endptr;
-  return (*pShow < 8 && POINTS_TO_SEPARATOR(*pArg)) ? S_OK : E_INVALIDARG;
-}
-
 static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
 {
   static INITIALIZED_BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN), { TAG, L'~' }); // the uuid string is appended at runtime
   static VARIANT taskArg = { .vt = VT_BSTR, .bstrVal = identifier.bstr };
 
+  const WORD show = ConvertNumericArg(&arg, FALSE); // if the show and wait arguments are missing, arg points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
+  const DWORD wait = ConvertNumericArg(&arg, TRUE); // if the wait argument is omitted, it defaults to 0 (FALSE) and arg will remain the same pointer
+  if (show > MAX_SHOW || !POINTS_TO_SEPARATOR(arg))
+    return E_INVALIDARG;
+
   HRESULT hres = CoInitialize(NULL);
   if (FAILED(hres))
     return hres;
-
-  DWORD show, wait;
-  CLEANUP_IF_FAILED(ConvertNumericArgs(&arg, &show, &wait));
 
   CLEANUP_IF_FAILED(MakeIdentifierUnique(identifier.bstr)); // append a uuid string
   SKIP_SEPARATORS(arg); // move the arg pointer to the first character of the command
@@ -295,7 +249,7 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   pSettings->dwXCountChars = cmdLen; // used to transfer the length of the command line to execute, incl. terminating null
   pSettings->dwYCountChars = dirLen; // used to transfer the path length of the current directory, incl. terminating null
   pSettings->dwFlags = STARTF_USESHOWWINDOW; // wShowWindow is used for process creation, while members like dwX* or dwY* are ignored and used for custom IPC
-  pSettings->wShowWindow = (WORD)show;
+  pSettings->wShowWindow = show;
   strDest = EndOfMemoryCopyW(strDest, arg, cmdLen); // command
   strDest = EndOfMemoryCopyW(strDest, PROC_PARAM_VALUE_OF(curDirBuf), dirLen - 1) + 1; // current directory, the terminator is maintained in the zero-initialized view memory
   EndOfMemoryCopyW(strDest, PROC_PARAM_VALUE_OF(envBuf), (DWORD)(PROC_PARAM_VALUE_OF(envSize) / sizeof(WCHAR))); // environment strings
