@@ -50,16 +50,17 @@ MAIN(void);
 #    define MAIN int main
 #  endif
 
+// inlining functions that have only one caller and are invoked only once is enforced because optimizations are desired in a broader context
 #  if defined(__has_attribute)
 #    if __has_attribute(always_inline)
-#      define FORCE_INLINE inline __attribute__((always_inline))
+#      define ONE_OFF inline __attribute__((always_inline))
 #    endif
 #  endif
-#  if !defined(FORCE_INLINE)
+#  if !defined(ONE_OFF)
 #    if defined(_MSC_VER)
-#      define FORCE_INLINE __forceinline
+#      define ONE_OFF __forceinline
 #    else
-#      define FORCE_INLINE inline
+#      define ONE_OFF inline
 #    endif
 #  endif
 
@@ -192,7 +193,7 @@ static inline WCHAR *EndOfMemoryCopyW(WCHAR *dst, const WCHAR *src, DWORD cnt)
   return dst; // note: this is the pointer to the WCHAR past the last copied
 }
 
-static FORCE_INLINE HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
+static ONE_OFF HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
 {
   static const VARIANT vEmptyByVal = { .vt = VT_EMPTY };
   static ITaskFolder *pTaskFolder = NULL;
@@ -221,7 +222,7 @@ cleanup:
   return hres;
 }
 
-static FORCE_INLINE HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
+static ONE_OFF HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
 {
   GUID uuid;
   const HRESULT hres = CoCreateGuid(&uuid);
@@ -232,7 +233,7 @@ static FORCE_INLINE HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
   return S_OK;
 }
 
-static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
+static ONE_OFF HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
 {
   static INITIALIZED_BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN), { TAG, L'~' }); // the uuid string is appended at runtime
   static VARIANT taskArg = { .vt = VT_BSTR, .bstrVal = identifier.bstr };
@@ -278,7 +279,7 @@ cleanup:
 #endif
 
 #if REGION(admin branch)
-static FORCE_INLINE HRESULT AsAdmin(const WCHAR *const arg, const DWORD *const pLastError)
+static ONE_OFF HRESULT AsAdmin(const WCHAR *const arg, const DWORD *const pLastError)
 {
   static PROCESS_INFORMATION procInf = { .hProcess = NULL };
 
@@ -311,7 +312,7 @@ cleanup:
 #endif
 
 #if REGION(main)
-static FORCE_INLINE const WCHAR *GetArgPtr(const WCHAR *cmdLn) // skip both the app name and the following separator(s), return a pointer to the first program argument in the command line
+static ONE_OFF const WCHAR *GetArgPtr(const WCHAR *cmdLn) // skip both the app name and the following separator(s), return a pointer to the first program argument in the command line
 {
   for (;; ++cmdLn)
   {
