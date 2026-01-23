@@ -147,13 +147,21 @@ static HANDLE fmo = NULL; // named file mapping object
 static LPVOID view = NULL; // view of the file mapping
 
 #if REGION(invoker branch)
-static inline WORD ConvertNumericArg(const WCHAR **const pArg, const BOOL skipSeparators)
+typedef enum ConversionTarget
+{
+  ShowArg,
+  WaitArg
+} CONVERSIONTARGET;
+
+static inline WORD ConvertNumericArg(const WCHAR **const pArg, const /*template*/ CONVERSIONTARGET target)
 {
   int result, item;
   const WCHAR *pChar = *pArg;
-  if (skipSeparators)
+  if /*constexpr*/ (target == WaitArg) // separators before the show argument have already been skipped in GetArgPtr()
+  {
     while (POINTS_TO_SEPARATOR(pChar))
       ++pChar;
+  }
 
   if (*pChar > L'9' || (result = lookup[*pChar]) < 0)
     return 0;
@@ -163,8 +171,11 @@ static inline WORD ConvertNumericArg(const WCHAR **const pArg, const BOOL skipSe
     result = result * 10 + item;
     if (result > MAX_SHOW)
     {
-      for (++*pArg; **pArg <= L'9' && lookup[**pArg] >= 0; ++*pArg)
-        ;
+      if /*constexpr*/ (target == WaitArg) // if the show argument is > MAX_SHOW, an error will be triggered anyway, so there is no reason to unnecessarily discard remaining digits
+      {
+        for (++*pArg; **pArg <= L'9' && lookup[**pArg] >= 0; ++*pArg)
+          ;
+      }
 
       break;
     }
@@ -226,8 +237,8 @@ static FORCE_INLINE HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLast
   static INITIALIZED_BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN), { TAG, L'~' }); // the uuid string is appended at runtime
   static VARIANT taskArg = { .vt = VT_BSTR, .bstrVal = identifier.bstr };
 
-  const WORD show = ConvertNumericArg(&arg, FALSE); // if the show and wait arguments are missing, arg points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
-  const DWORD wait = ConvertNumericArg(&arg, TRUE); // if the wait argument is omitted, it defaults to 0 (FALSE) and arg will remain the same pointer
+  const WORD show = ConvertNumericArg(&arg, ShowArg); // if the show and wait arguments are missing, arg points to the begin of the command which makes the POINTS_TO_SEPARATOR() check fail
+  const DWORD wait = ConvertNumericArg(&arg, WaitArg); // if the wait argument is omitted, it defaults to 0 (FALSE) and arg will remain the same pointer
   if (show > MAX_SHOW || !POINTS_TO_SEPARATOR(arg))
     return E_INVALIDARG;
 
