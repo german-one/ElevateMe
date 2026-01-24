@@ -89,6 +89,7 @@ MAIN(void);
       }                                                                  \
     } while (0)
 
+// types and offsets of fields in the RTL_USER_PROCESS_PARAMETERS data
 #  define cmdLnBuf_TYPE const WCHAR *const // <cmdLnBuf> command line (UNICODE_STRING::Buffer); null terminated because this is the same pointer that GetCommandLineW() returns
 #  define cmdLnSize_TYPE const WORD // <cmdLnSize> number of bytes, terminator not counted (UNICODE_STRING::Length)
 #  define curDirBuf_TYPE const WCHAR *const // <curDirBuf> current directory (UNICODE_STRING::Buffer)
@@ -116,12 +117,32 @@ MAIN(void);
 #  define POINTS_TO_SEPARATOR(pchar_) (*(pchar_) == L' ' || *(pchar_) == L'\t') // space and tab are the default separators in a command line
 #  define SKIP_SEPARATORS(pchar_) for (++(pchar_); POINTS_TO_SEPARATOR(pchar_); ++(pchar_))
 
-#  define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                                          \
-    struct tag_##varname_ /* derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr */    \
-    {                                                                                                                            \
-      DWORD nbytes; /* length of the string in bytes, null terminator not counted */                                             \
-      WCHAR bstr[((bufcount_) + sizeof(DWORD) - 1) & ~(sizeof(DWORD) - 1)]; /* string buffer, DWORD aligned to avoid warnings */ \
-    } varname_ = { .nbytes = ((bufcount_)-1) * sizeof(WCHAR), .bstr = __VA_ARGS__ }
+// derived from https://learn.microsoft.com/en-us/previous-versions/windows/desktop/automat/bstr
+// observations have shown that the string buffer has native alignment (4 or 8 bytes in a 32-bit or 64-bit app, respectively)
+// so we define two versions of the macro with different aggregate types under the hood
+#  if defined(_WIN64)
+#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                               \
+      struct tag_##varname_                                                                                             \
+      {                                                                                                                 \
+        union                                                                                                           \
+        {                                                                                                               \
+          struct                                                                                                        \
+          {                                                                                                             \
+            UINT32 margin; /* unused, defines the offset of nbytes */                                                   \
+            UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                             \
+          };                                                                                                            \
+          UINT64 prefix; /* exists for alignment reasons only */                                                        \
+        };                                                                                                              \
+        OLECHAR bstr[((bufcount_) + sizeof(UINT64) - 1) & ~(sizeof(UINT64) - 1)]; /* string buffer, properly aligned */ \
+      } varname_ = { .margin = 0, .nbytes = ((bufcount_)-1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
+#  else
+#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                               \
+      struct tag_##varname_                                                                                             \
+      {                                                                                                                 \
+        UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                                 \
+        OLECHAR bstr[((bufcount_) + sizeof(UINT32) - 1) & ~(sizeof(UINT32) - 1)]; /* string buffer, properly aligned */ \
+      } varname_ = { .nbytes = ((bufcount_)-1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
+#  endif
 
 #  define TASK_ROOT L"\\"
 #  define TASK_NAME L"ElevateMe"
@@ -154,6 +175,7 @@ typedef enum ConversionTarget
   WaitArg
 } CONVERSIONTARGET;
 
+// simple wcstol()-like function that meets our needs to convert both the show and wait arguments
 static inline WORD ConvertNumericArg(const WCHAR **const pArg, const /*template*/ CONVERSIONTARGET target)
 {
   int result, item;
@@ -185,6 +207,7 @@ static inline WORD ConvertNumericArg(const WCHAR **const pArg, const /*template*
   return (WORD)result;
 }
 
+// unlike memcpyw(), this function returns a pointer to the end of the copied sequence of wide characters
 static inline WCHAR *EndOfMemoryCopyW(WCHAR *dst, const WCHAR *src, DWORD cnt)
 {
   while (cnt--)
@@ -193,6 +216,7 @@ static inline WCHAR *EndOfMemoryCopyW(WCHAR *dst, const WCHAR *src, DWORD cnt)
   return dst; // note: this is the pointer to the WCHAR past the last copied
 }
 
+// we need to use the task scheduler COM interfaces to run the ElevateMe task
 static ONE_OFF HRESULT RunScheduledTask(const VARIANT *const pTaskArg)
 {
   static const VARIANT vEmptyByVal = { .vt = VT_EMPTY };
@@ -222,6 +246,7 @@ cleanup:
   return hres;
 }
 
+// append a uuid to the statically initialized prefix in the string buffer of the identifier
 static ONE_OFF HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
 {
   GUID uuid;
@@ -233,6 +258,7 @@ static ONE_OFF HRESULT MakeIdentifierUnique(WCHAR *const identifierBstr)
   return S_OK;
 }
 
+// code branch of the user-initiated process, which prepares the IPC data and calls the scheduled task
 static ONE_OFF HRESULT AsInvoker(const WCHAR *arg, const DWORD *const pLastError, const BYTE *const pProcParams)
 {
   static INITIALIZED_BSTR_BUF(identifier, ARRAYSIZE(TAGGED_UUID_PATTERN), { TAG, L'~' }); // the uuid string is appended at runtime
@@ -279,6 +305,7 @@ cleanup:
 #endif
 
 #if REGION(admin branch)
+// code branch of the task-initiated process, which executes the command elevated
 static ONE_OFF HRESULT AsAdmin(const WCHAR *const arg, const DWORD *const pLastError)
 {
   static PROCESS_INFORMATION procInf = { .hProcess = NULL };
@@ -312,7 +339,8 @@ cleanup:
 #endif
 
 #if REGION(main)
-static ONE_OFF const WCHAR *GetArgPtr(const WCHAR *cmdLn) // skip both the app name and the following separator(s), return a pointer to the first program argument in the command line
+// skip both the app name and the following separator(s), return a pointer to the first program argument in the command line
+static ONE_OFF const WCHAR *GetArgPtr(const WCHAR *cmdLn)
 {
   for (;; ++cmdLn)
   {
