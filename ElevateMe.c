@@ -121,27 +121,27 @@ MAIN(void);
 // observations have shown that the string buffer has native alignment (4 or 8 bytes in a 32-bit or 64-bit app, respectively)
 // so we define two versions of the macro with different aggregate types under the hood
 #  if defined(_WIN64)
-#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                               \
-      struct tag_##varname_                                                                                             \
-      {                                                                                                                 \
-        union                                                                                                           \
-        {                                                                                                               \
-          struct                                                                                                        \
-          {                                                                                                             \
-            UINT32 margin; /* unused, defines the offset of nbytes */                                                   \
-            UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                             \
-          };                                                                                                            \
-          UINT64 prefix; /* exists for alignment reasons only */                                                        \
-        };                                                                                                              \
-        OLECHAR bstr[((bufcount_) + sizeof(UINT64) - 1) & ~(sizeof(UINT64) - 1)]; /* string buffer, properly aligned */ \
-      } varname_ = { .margin = 0, .nbytes = ((bufcount_)-1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
+#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                                                                   \
+      struct tag_##varname_                                                                                                                                 \
+      {                                                                                                                                                     \
+        union                                                                                                                                               \
+        {                                                                                                                                                   \
+          struct                                                                                                                                            \
+          {                                                                                                                                                 \
+            UINT32 margin; /* unused, defines the offset of nbytes */                                                                                       \
+            UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                                                                 \
+          };                                                                                                                                                \
+          UINT64 prefix; /* exists for alignment reasons only */                                                                                            \
+        };                                                                                                                                                  \
+        OLECHAR bstr[((bufcount_) + sizeof(UINT64) / sizeof(OLECHAR) - 1) & ~(sizeof(UINT64) / sizeof(OLECHAR) - 1)]; /* string buffer, properly aligned */ \
+      } varname_ = { .margin = 0, .nbytes = ((bufcount_) - 1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
 #  else
-#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                               \
-      struct tag_##varname_                                                                                             \
-      {                                                                                                                 \
-        UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                                 \
-        OLECHAR bstr[((bufcount_) + sizeof(UINT32) - 1) & ~(sizeof(UINT32) - 1)]; /* string buffer, properly aligned */ \
-      } varname_ = { .nbytes = ((bufcount_)-1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
+#    define INITIALIZED_BSTR_BUF(varname_, bufcount_, /*initializer*/...)                                                                                   \
+      struct tag_##varname_                                                                                                                                 \
+      {                                                                                                                                                     \
+        UINT32 nbytes; /* length of the string in bytes, null terminator not counted */                                                                     \
+        OLECHAR bstr[((bufcount_) + sizeof(UINT32) / sizeof(OLECHAR) - 1) & ~(sizeof(UINT32) / sizeof(OLECHAR) - 1)]; /* string buffer, properly aligned */ \
+      } varname_ = { .nbytes = ((bufcount_) - 1) * sizeof(OLECHAR), .bstr = __VA_ARGS__ }
 #  endif
 
 #  define TASK_ROOT L"\\"
